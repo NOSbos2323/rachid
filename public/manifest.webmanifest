@@ -1,0 +1,13 @@
+{
+  "name": "Waali Gas Station",
+  "short_name": "WaaliGas",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    { "src": "/waali-gas-logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/waali-gas-logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
