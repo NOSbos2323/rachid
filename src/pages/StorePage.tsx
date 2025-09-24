@@ -24,6 +24,7 @@ type Item = {
   name: string;
   price: number; // per unit (TProf)
   profit: number; // per unit (NP)
+  stock: number; // available stock
 };
 
 type Sold = Record<string, string>; // id -> qty text
@@ -41,13 +42,42 @@ function todayKey(): string {
 }
 
 const DEFAULT_ITEMS: Item[] = [
-  { id: crypto.randomUUID(), name: "Water 1.5L", price: 80, profit: 15 },
-  { id: crypto.randomUUID(), name: "Wipers", price: 700, profit: 120 },
-  { id: crypto.randomUUID(), name: "Snacks", price: 120, profit: 30 },
+  { id: crypto.randomUUID(), name: "Water 1.5L", price: 80, profit: 15, stock: 0 },
+  { id: crypto.randomUUID(), name: "Wipers", price: 700, profit: 120, stock: 0 },
+  { id: crypto.randomUUID(), name: "Snacks", price: 120, profit: 30, stock: 0 },
+  { id: crypto.randomUUID(), name: "H Gaz 1L V", price: 500, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "H 10 V L", price: 500, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "H 140 V", price: 0, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "H 10 V", price: 0, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "HTD V", price: 550, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "H 10 W40 1L", price: 1100, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "HTD 5L", price: 3000, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "H10W40 4L", price: 4400, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "H5W 40 5L", price: 4500, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "GALSIOL 5L", price: 850, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "GLASIOL 2L", price: 480, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "Lave Glass 2L", price: 300, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "Tondeuer Naftal", price: 950, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "Grass 1KG", price: 500, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "Acide", price: 220, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "Eau Disstile", price: 100, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "H 1L 75W80", price: 1200, profit: 0, stock: 0 },
+  { id: crypto.randomUUID(), name: "Fut", price: 1200, profit: 0, stock: 0 },
 ];
 
 export default function StorePage() {
   const [items, setItems] = useState<Item[]>(() => store.get<Item[]>("gs.store.items", DEFAULT_ITEMS));
+  // Seed/merge defaults once so new catalog items appear for existing users
+  useEffect(() => {
+    const existing = store.get<Item[]>("gs.store.items", []);
+    if (!existing || existing.length === 0) {
+      setItems(DEFAULT_ITEMS);
+      return;
+    }
+    const names = new Set(existing.map(i => i.name.trim().toLowerCase()));
+    const missing = DEFAULT_ITEMS.filter(d => !names.has(d.name.trim().toLowerCase()));
+    if (missing.length > 0) setItems(prev => [...prev, ...missing]);
+  }, []);
   const [sold, setSold] = useState<Sold>({});
 
   // Shared configs with MainPage
@@ -97,8 +127,9 @@ export default function StorePage() {
   const addItem = () => {
     const name = prompt("Item name", "New Item");
     if (!name) return;
-    setItems((s) => [...s, { id: crypto.randomUUID(), name, price: 0, profit: 0 }]);
+    setItems((s) => [...s, { id: crypto.randomUUID(), name, price: 0, profit: 0, stock: 0 }]);
   };
+  const removeItem = (id: string) => setItems((s) => s.filter(i => i.id !== id));
 
   const saveDay = () => {
     const entry: StoreHistoryItem = { date: todayKey(), totals: { tProf: Number(totals.tProf.toFixed(2)), nProf: Number(totals.nProf.toFixed(2)) } };
@@ -118,7 +149,7 @@ export default function StorePage() {
         <CardContent className="space-y-3">
           {rows.map(({ it, q, tProf, nProf }) => (
             <div key={it.id} className="grid grid-cols-12 gap-2 items-end border rounded-md p-3">
-              <div className="col-span-4 space-y-1">
+              <div className="col-span-3 space-y-1">
                 <Label className="text-xs">Name</Label>
                 <Input value={it.name} onChange={(e) => setItems((s) => s.map(x => x.id === it.id ? { ...x, name: e.target.value } : x))} />
               </div>
@@ -131,12 +162,19 @@ export default function StorePage() {
                 <Input inputMode="decimal" value={it.profit} onChange={(e) => setItems((s) => s.map(x => x.id === it.id ? { ...x, profit: parseFloat(e.target.value) || 0 } : x))} />
               </div>
               <div className="col-span-2 space-y-1">
+                <Label className="text-xs">Stock</Label>
+                <Input inputMode="numeric" value={it.stock} onChange={(e) => setItems((s) => s.map(x => x.id === it.id ? { ...x, stock: Math.max(0, parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0) } : x))} />
+              </div>
+              <div className="col-span-1 space-y-1">
                 <Label className="text-xs">Sold</Label>
                 <Input inputMode="numeric" value={sold[it.id] || ""} onChange={(e) => setSold((s) => ({ ...s, [it.id]: e.target.value }))} placeholder="0" />
               </div>
               <div className="col-span-2 text-sm">
                 <div className="flex items-center gap-2"><span className="text-muted-foreground">TP:</span><span className="font-semibold">{tProf.toFixed(2)} DZD</span></div>
                 <div className="flex items-center gap-2"><span className="text-muted-foreground">NP:</span><span className="font-semibold">{nProf.toFixed(2)} DZD</span></div>
+              </div>
+              <div className="col-span-12 text-right">
+                <Button size="sm" variant="destructive" onClick={() => removeItem(it.id)}>Delete</Button>
               </div>
             </div>
           ))}

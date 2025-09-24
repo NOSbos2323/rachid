@@ -232,16 +232,11 @@ function MainShell({
               <Moon className="h-4 w-4" />
             </div>
             <div className="flex items-center gap-2">
-              <Label htmlFor="lang" className="text-xs">Lang</Label>
-              <select
-                id="lang"
-                className="bg-transparent border rounded-md px-2 py-1 text-sm"
-                value={lang}
-                onChange={(e) => setLang(e.target.value)}
-              >
-                <option value="fr">Français</option>
-                <option value="ar">العربية</option>
-              </select>
+              <div className="flex items-center gap-1">
+                <Button variant={lang === "ar" ? "default" : "secondary"} size="sm" onClick={() => setLang("ar")}>AR</Button>
+                <Button variant={lang === "fr" ? "default" : "secondary"} size="sm" onClick={() => setLang("fr")}>FR</Button>
+                <Button variant={lang === "en" ? "default" : "secondary"} size="sm" onClick={() => setLang("en")}>EN</Button>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm">{user?.username || "user"}</span>

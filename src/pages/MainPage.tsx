@@ -162,6 +162,38 @@ export default function MainPage() {
     })
   );
 
+  // Store items (for showing in Oils section) — hidden when stock = 0
+  type StoreItem = { id: string; name: string; price: number; profit: number; stock: number };
+  const [storeItemsMP, setStoreItemsMP] = useState<StoreItem[]>(() => store.get<StoreItem[]>("gs.store.items", []));
+  const visibleStoreItems = (storeItemsMP || []).filter(it => (it.stock || 0) > 0);
+
+  // Oil products selling like fuel: show Prev (stock), input Today Left -> Sold = Prev - Today
+  const [storeLeft, setStoreLeft] = useState<Record<string, string>>(() => store.get<Record<string, string>>("gs.store.left.today", {}));
+  useEffect(() => { store.set("gs.store.left.today", storeLeft); }, [storeLeft]);
+
+  const storeRows = visibleStoreItems.map((it) => {
+    const prev = it.stock || 0;
+    const todayLeft = Math.max(0, parseInt((storeLeft[it.id] || "").replace(/[^0-9]/g, '')) || 0);
+    const sold = Math.max(0, prev - todayLeft);
+    const tProf = sold * (it.price || 0);
+    const nProf = sold * (it.profit || 0);
+    return { it, prev, todayLeft, sold, tProf, nProf };
+  });
+
+  const storeTotals = storeRows.reduce((acc, r) => ({ tProf: acc.tProf + r.tProf, nProf: acc.nProf + r.nProf }), { tProf: 0, nProf: 0 });
+
+  const applyStoreSales = () => {
+    const all = store.get<StoreItem[]>("gs.store.items", []);
+    const updated = all.map((it) => {
+      const left = Math.max(0, parseInt((storeLeft[it.id] || "").replace(/[^0-9]/g, '')) || it.stock || 0);
+      return { ...it, stock: left };
+    });
+    store.set("gs.store.items", updated);
+    setStoreItemsMP(updated);
+    setStoreLeft({});
+    alert("Updated stock from Today Left");
+  };
+
   // Other Expenses state
   const [otherItems, setOtherItems] = useState<OtherExpense[]>(() => store.get<OtherExpense[]>("gs.other.itemsToday", []));
   const [expDraft, setExpDraft] = useState<OtherExpenseDraft>({ name: "", type: "Other", amount: "", deductFrom: "NP", note: "" });
@@ -207,9 +239,15 @@ export default function MainPage() {
   useEffect(() => {
     store.set("gs.gazb", gazb);
   }, [gazb]);
-  useEffect(() => { store.set("gs.other.itemsToday", otherItems); }, [otherItems]);
-  useEffect(() => { store.set("gs.workers.list", workers); }, [workers]);
-  useEffect(() => { store.set("gs.cashier.change.today", cashierChange); }, [cashierChange]);
+  useEffect(() => {
+    store.set("gs.other.itemsToday", otherItems);
+  }, [otherItems]);
+  useEffect(() => {
+    store.set("gs.workers.list", workers);
+  }, [workers]);
+  useEffect(() => {
+    store.set("gs.cashier.change.today", cashierChange);
+  }, [cashierChange]);
 
   const tankById = useMemo(() => Object.fromEntries(tanks.map(t => [t.id, t])), [tanks]);
   const oilTank = tanks.find(t => t.fuelType === "OIL");
@@ -268,8 +306,8 @@ export default function MainPage() {
   const gazbNProf = gazbSold * (gazb.profit || 0);
 
   const overall = {
-    tProf: totals.tProf + oilTProf + oilBottlesTProf + gazbTProf,
-    nProf: totals.nProf + oilNProf + oilBottlesNProf + gazbNProf,
+    tProf: totals.tProf + oilTProf + oilBottlesTProf + gazbTProf + storeTotals.tProf,
+    nProf: totals.nProf + oilNProf + oilBottlesNProf + gazbNProf + storeTotals.nProf,
   };
 
   // Other expenses adjustments
@@ -323,6 +361,18 @@ export default function MainPage() {
 
       return next;
     });
+
+    // 1.5) Update store items stock from Today Left like pumps (Prev -> Today)
+    {
+      const all = store.get<StoreItem[]>("gs.store.items", []);
+      const updated = all.map((it) => {
+        const left = Math.max(0, parseInt((storeLeft[it.id] || "").replace(/[^0-9]/g, '')) || it.stock || 0);
+        return { ...it, stock: left };
+      });
+      store.set("gs.store.items", updated);
+      setStoreItemsMP(updated);
+      setStoreLeft({});
+    }
 
     // 2) Update stocks and reset inputs for oil/gazb
     setOil((s: any) => ({
@@ -618,6 +668,37 @@ export default function MainPage() {
 
           <Separator />
 
+          {/* Products (in oil section, direct sales) */}
+          <div className="space-y-2">
+            {visibleStoreItems.length === 0 ? (
+              <div className="text-sm text-muted-foreground">No products in stock.</div>
+            ) : (
+              <div className="space-y-2 text-sm">
+                {storeRows.map(({ it, prev, todayLeft, sold, tProf, nProf }) => (
+                  <div key={it.id} className="grid grid-cols-12 gap-2 items-end border rounded-md p-2">
+                    <div className="col-span-3 font-medium truncate" title={it.name}>{it.name}</div>
+                    <div className="col-span-2">Prev: {prev}</div>
+                    <div className="col-span-2">Price: {Number(it.price || 0).toFixed(2)}</div>
+                    <div className="col-span-2">NP/U: {Number(it.profit || 0).toFixed(2)}</div>
+                    <div className="col-span-3 space-y-1">
+                      <Label className="text-xs">Today Left</Label>
+                      <Input inputMode="numeric" value={storeLeft[it.id] || ""} onChange={(e) => setStoreLeft(s => ({ ...s, [it.id]: e.target.value }))} placeholder="0" />
+                    </div>
+                    <div className="col-span-12 grid grid-cols-12 gap-2 text-xs">
+                      <div className="col-span-4">Sold: <span className="font-semibold">{sold}</span></div>
+                      <div className="col-span-4">TP: <span className="font-semibold">{tProf.toFixed(2)} DZD</span></div>
+                      <div className="col-span-4">NP: <span className="font-semibold">{nProf.toFixed(2)} DZD</span></div>
+                    </div>
+                  </div>
+                ))}
+                <div className="flex items-center gap-2">
+                  <div className="text-sm text-muted-foreground">Totals — TP: <span className="font-semibold text-foreground">{storeTotals.tProf.toFixed(2)} DZD</span> · NP: <span className="font-semibold text-foreground">{storeTotals.nProf.toFixed(2)} DZD</span></div>
+                  <div className="ml-auto"><Button size="sm" onClick={applyStoreSales}>Update stock</Button></div>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-12 gap-2 text-sm">
             <div className="col-span-6 space-y-1">
               <div>Liters (readings): {oilLitersByReadings.toFixed(2)} L</div>
@@ -887,6 +968,11 @@ export default function MainPage() {
               <div className="font-medium">GazB Bottles</div>
               <div>TP: {gazbTProf.toFixed(2)} DZD</div>
               <div>NP: {gazbNProf.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">Products</div>
+              <div>TP: {storeTotals.tProf.toFixed(2)} DZD</div>
+              <div>NP: {storeTotals.nProf.toFixed(2)} DZD</div>
             </div>
           </div>
 
