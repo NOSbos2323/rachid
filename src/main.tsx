@@ -17,11 +17,18 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   </React.StrictMode>,
 );
 
-// Register service worker for offline support (PWA)
+// Register/unregister service worker based on environment
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch((err) => {
-      console.warn("SW registration failed", err);
+  if (import.meta.env.MODE !== "production") {
+    // In dev (including Tempo), ensure no stale SW caches block updates
+    navigator.serviceWorker.getRegistrations().then((regs) => {
+      for (const r of regs) r.unregister();
     });
-  });
+  } else {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch((err) => {
+        console.warn("SW registration failed", err);
+      });
+    });
+  }
 }

@@ -111,8 +111,19 @@ type OtherExpenseDraft = {
 type Worker = {
   id: string;
   name: string;
+  balance?: number;
   lastPayment?: { date: string; amount: number };
   payments?: { date: string; amount: number; note?: string }[];
+};
+
+// Credit ledger types
+type CreditTx = {
+  id: string;
+  date: string; // yyyy-mm-dd
+  customer: string;
+  amount: number;
+  kind: 'payment' | 'sale';
+  category?: 'Fuel' | 'Store' | 'Other';
 };
 
 function todayKey(): string {
@@ -126,6 +137,8 @@ export default function MainPage() {
   // Load custom pump names saved from Tanks page (fallback to defaults)
   const pumpNames = store.get<Record<string, string>>("gs.pumps.names", {});
   const pumps = DEFAULT_PUMPS.map((p) => ({ ...p, name: pumpNames[p.id] || p.name }));
+  // Move cashierChange to the very top of state declarations to avoid any TDZ issues
+  const [cashierChange, setCashierChange] = useState<number>(() => store.get<number>("gs.cashier.change.today", 0));
 
   const [readings, setReadings] = useState<PumpReadings>(() =>
     store.get<PumpReadings>("gs.pumps.readings", Object.fromEntries(pumps.map(p => [p.id, { prev: 0 }])))
@@ -173,8 +186,10 @@ export default function MainPage() {
 
   const storeRows = visibleStoreItems.map((it) => {
     const prev = it.stock || 0;
-    const todayLeft = Math.max(0, parseInt((storeLeft[it.id] || "").replace(/[^0-9]/g, '')) || 0);
-    const sold = Math.max(0, prev - todayLeft);
+    const raw = (storeLeft[it.id] ?? "").replace(/[^0-9]/g, '');
+    const hasInput = raw.trim() !== "";
+    const todayLeft = hasInput ? Math.max(0, parseInt(raw) || 0) : prev;
+    const sold = hasInput ? Math.max(0, prev - todayLeft) : 0;
     const tProf = sold * (it.price || 0);
     const nProf = sold * (it.profit || 0);
     return { it, prev, todayLeft, sold, tProf, nProf };
@@ -183,9 +198,12 @@ export default function MainPage() {
   const storeTotals = storeRows.reduce((acc, r) => ({ tProf: acc.tProf + r.tProf, nProf: acc.nProf + r.nProf }), { tProf: 0, nProf: 0 });
 
   const applyStoreSales = () => {
+    if (!confirm("Are you sure you want to update stock from Today Left?")) return;
     const all = store.get<StoreItem[]>("gs.store.items", []);
     const updated = all.map((it) => {
-      const left = Math.max(0, parseInt((storeLeft[it.id] || "").replace(/[^0-9]/g, '')) || it.stock || 0);
+      const leftText = (storeLeft[it.id] || "").replace(/[^0-9]/g, '');
+      const hasInput = leftText.trim() !== "";
+      const left = hasInput ? Math.max(0, parseInt(leftText) || 0) : (it.stock || 0);
       return { ...it, stock: left };
     });
     store.set("gs.store.items", updated);
@@ -201,19 +219,54 @@ export default function MainPage() {
   // Workers state (used when type = Worker payment)
   const [workers, setWorkers] = useState<Worker[]>(() =>
     store.get<Worker[]>("gs.workers.list", [
-      { id: "w1", name: "Worker A" },
-      { id: "w2", name: "Worker B" },
+      { id: "w1", name: "Worker A", balance: 0 },
+      { id: "w2", name: "Worker B", balance: 0 },
     ])
   );
 
-  // Cashier change (deducted from Net Profit)
-  const [cashierChange, setCashierChange] = useState<number>(() => store.get<number>("gs.cashier.change.today", 0));
+  // Selected cashier worker for closing adjustments
+  const [closingCashierId, setClosingCashierId] = useState<string>(() => store.get<string>("gs.cashier.workerId", ""));
+  useEffect(() => { store.set("gs.cashier.workerId", closingCashierId); }, [closingCashierId]);
 
   // Credit sales/payments (today)
   const [creditsSumToday, setCreditsSumToday] = useState<number>(() => store.get<number>("gs.credits.today", 0));
   const [paidCreditsToday, setPaidCreditsToday] = useState<number>(() => store.get<number>("gs.credits.paid.today", 0));
+  // cashierChange defined above
   // Load clients created in Credits page
   const [creditClients, setCreditClients] = useState<CreditClient[]>(() => store.get<CreditClient[]>("gs.credits.clients", []));
+  // Credit ledger (persisted)
+  const [creditLedger, setCreditLedger] = useState<CreditTx[]>(() => store.get<CreditTx[]>("gs.credits.ledger", []));
+  useEffect(() => { store.set("gs.credits.ledger", creditLedger); }, [creditLedger]);
+  // Fixed Overall Totals snapshot (freeze when first credit sale is added)
+  const [overallFixedTP, setOverallFixedTP] = useState<number | null>(() => store.get<number | null>("gs.overall.fixed.tp", null));
+  const [overallFixedNP, setOverallFixedNP] = useState<number | null>(() => store.get<number | null>("gs.overall.fixed.np", null));
+  useEffect(() => { store.set("gs.overall.fixed.tp", overallFixedTP as any); }, [overallFixedTP]);
+  useEffect(() => { store.set("gs.overall.fixed.np", overallFixedNP as any); }, [overallFixedNP]);
+  
+  // After a saved day, clear credit aggregates automatically on the next day (not immediately on save)
+  useEffect(() => {
+    const closed = store.get<string>("gs.day.closed", "");
+    if (closed && closed !== todayKey()) {
+      store.set("gs.credits.today", 0);
+      store.set("gs.credits.paid.today", 0);
+      setCreditsSumToday(0);
+      setPaidCreditsToday(0);
+      // reset fixed overall snapshot for new day
+      store.set("gs.overall.fixed.tp", null as any);
+      store.set("gs.overall.fixed.np", null as any);
+      setOverallFixedTP(null);
+      setOverallFixedNP(null);
+    }
+  }, []);
+
+  // Track if the day has been saved to hide today's credit lists from summaries
+  const [dayClosedOn, setDayClosedOn] = useState<string>(() => store.get<string>("gs.day.closed", ""));
+  useEffect(() => { store.set("gs.day.closed", dayClosedOn); }, [dayClosedOn]);
+  // Cashier Closing Summary state
+  const [closingActualCash, setClosingActualCash] = useState<string>(() => store.get<string>("gs.cashier.close.actual", ""));
+  useEffect(() => { store.set("gs.cashier.close.actual", closingActualCash); }, [closingActualCash]);
+  const [closingPaidOverride, setClosingPaidOverride] = useState<string>("");
+  const [closingNewCreditsOverride, setClosingNewCreditsOverride] = useState<string>("");
   // sanitize any clients that may have empty IDs (avoids Radix Select.Item empty value error)
   useEffect(() => {
     const needFix = creditClients.some(c => !c.id || c.id.trim() === "");
@@ -313,11 +366,38 @@ export default function MainPage() {
   // Other expenses adjustments
   const tpAdj = otherItems.filter(i => i.deductFrom === 'TP').reduce((s, i) => s + (i.amount || 0), 0);
   const npAdj = otherItems.filter(i => i.deductFrom === 'NP').reduce((s, i) => s + (i.amount || 0), 0);
-  const finalTotals = {
-    tProf: Math.max(0, overall.tProf - tpAdj + creditsSumToday - paidCreditsToday),
-    nProf: Math.max(0, overall.nProf - npAdj + (cashierChange || 0)),
+  // Combined totals after Paid Credits + Starting Money (before credit sales deduction)
+  const combined = {
+    tProf: overall.tProf + paidCreditsToday + (cashierChange || 0),
+    // Starting money should NOT affect Net Profit
+    nProf: overall.nProf,
   };
-  const creditsToday = store.get<number>("gs.credits.today", 0);
+  // Final totals after adjustments and deducting credit sales
+  const finalTotals = {
+    tProf: Math.max(0, combined.tProf - tpAdj - creditsSumToday),
+    nProf: Math.max(0, combined.nProf - npAdj),
+  };
+
+  // Display totals for Overall card (no credit sales deduction)
+  const overallDisplayTotals = {
+    tProf: Math.max(0, combined.tProf - tpAdj),
+    nProf: Math.max(0, combined.nProf - npAdj),
+  };
+
+  // Reference totals to display (fixed after first credit sale)
+  const displayTP = (overallFixedTP ?? overallDisplayTotals.tProf);
+  const displayNP = (overallFixedNP ?? overallDisplayTotals.nProf);
+  const adjustedTP = Math.max(0, displayTP - creditsSumToday);
+
+  // Cashier Closing Summary calculations
+  const closingCreditsPaid = (closingPaidOverride.trim() !== "") ? (parseFloat(closingPaidOverride.replace(',', '.')) || 0) : paidCreditsToday;
+  const closingNewCredits = (closingNewCreditsOverride.trim() !== "") ? (parseFloat(closingNewCreditsOverride.replace(',', '.')) || 0) : creditsSumToday;
+  const todaySales = overall.tProf;
+  const expectedSalesCash = Math.max(0, todaySales - closingNewCredits);
+  const expectedClosing = (cashierChange || 0) + expectedSalesCash + closingCreditsPaid;
+  const actualCash = parseFloat((closingActualCash || "").replace(',', '.')) || 0;
+  const closingDiff = Number((actualCash - expectedClosing).toFixed(2));
+  const closingStatus = closingDiff === 0 ? 'ok' : (closingDiff < 0 ? 'short' : 'extra');
 
   // Allow editing Oil previous number (P.N)
   const resetOilPrev = () => {
@@ -327,8 +407,40 @@ export default function MainPage() {
     setOil((s: any) => ({ ...s, prev: n }));
   };
 
+  // Edit pump previous reading (P.N)
+  const resetPrev = (pumpId: string) => {
+    const v = prompt("Enter previous reading (P.N)", String(readings[pumpId]?.prev ?? 0));
+    if (v == null) return;
+    const n = parseFloat(v) || 0;
+    setReadings((s) => ({ ...s, [pumpId]: { prev: n } }));
+  };
+
+  // Add Other Expense
+  const addExpense = () => {
+    const amt = parseFloat((expDraft.amount || '').replace(',', '.')) || 0;
+    if (!expDraft.name.trim() || amt <= 0) return;
+    const item: OtherExpense = {
+      id: crypto.randomUUID(),
+      date: todayKey(),
+      name: expDraft.name.trim(),
+      type: expDraft.type,
+      amount: Number(amt.toFixed(2)),
+      deductFrom: expDraft.type === 'Worker payment' ? 'NP' : expDraft.deductFrom,
+      note: expDraft.note || '',
+      workerId: expDraft.type === 'Worker payment' ? expDraft.workerId : undefined,
+    };
+    setOtherItems((s) => [...s, item]);
+    setExpDraft({ name: "", type: "Other", amount: "", deductFrom: "NP", note: "", workerId: undefined });
+  };
+
+  // Remove Other Expense
+  const removeExpense = (id: string) => {
+    setOtherItems((s) => s.filter((i) => i.id !== id));
+  };
+
   // Add missing saveDay implementation
   const saveDay = () => {
+    if (!confirm("Are you sure you want to Save Day?")) return;
     const date = todayKey();
 
     // 1) Deduct liters from assigned tanks and log history
@@ -366,7 +478,9 @@ export default function MainPage() {
     {
       const all = store.get<StoreItem[]>("gs.store.items", []);
       const updated = all.map((it) => {
-        const left = Math.max(0, parseInt((storeLeft[it.id] || "").replace(/[^0-9]/g, '')) || it.stock || 0);
+        const leftText = (storeLeft[it.id] || "").replace(/[^0-9]/g, '');
+        const hasInput = leftText.trim() !== "";
+        const left = hasInput ? Math.max(0, parseInt(leftText) || 0) : (it.stock || 0);
         return { ...it, stock: left };
       });
       store.set("gs.store.items", updated);
@@ -412,97 +526,60 @@ export default function MainPage() {
     };
     store.set("gs.history.daily", [...hist, entry]);
 
-    // Reset daily credit aggregates
-    store.set("gs.credits.today", 0);
-    store.set("gs.credits.paid.today", 0);
-    setCreditsSumToday(0);
-    setPaidCreditsToday(0);
-    // Reset cashier change
-    store.set("gs.cashier.change.today", 0);
-    setCashierChange(0);
+    // Mark day closed so UI hides today's credit/payment name lists
+    setDayClosedOn(date);
+    
+    // Reset fixed overall snapshot for next day
+    store.set("gs.overall.fixed.tp", null as any);
+    store.set("gs.overall.fixed.np", null as any);
+    setOverallFixedTP(null);
+    setOverallFixedNP(null);
+    // Keep cashier starting money for carry-over to next day (no reset)
 
     alert("Saved day");
   };
 
-  // Selling with credit
-  type CreditTx = {
-    id: string;
-    date: string;
-    customer: string;
-    amount: number;
-    note?: string;
-    kind: 'sale' | 'payment';
-    category?: 'Fuel' | 'Store' | 'Other';
-  };
-  const [creditLedger, setCreditLedger] = useState<CreditTx[]>(() => store.get<CreditTx[]>("gs.credits.ledger", []));
-  useEffect(() => { store.set("gs.credits.ledger", creditLedger); }, [creditLedger]);
-  const [creditDraft, setCreditDraft] = useState({ clientId: "", op: 'credit' as 'credit'|'payment', amount: "", note: "", category: 'Fuel' as 'Fuel'|'Store'|'Other' });
+  // Drafts for Paid Credits and Sales with Credit
+  const [payDraft, setPayDraft] = useState<{ clientId: string; amount: string }>({ clientId: "", amount: "" });
+  const [creditSaleDraft, setCreditSaleDraft] = useState<{ clientId: string; amount: string; category: 'Fuel'|'Store'|'Other' }>({ clientId: "", amount: "", category: 'Fuel' });
 
-  const selectedClient = useMemo(() => creditClients.find(c => c.id === creditDraft.clientId), [creditClients, creditDraft.clientId]);
+  const clientById = useMemo(() => Object.fromEntries(creditClients.map(c => [c.id, c])), [creditClients]);
 
-  const addCreditTx = () => {
-    const amount = parseFloat(creditDraft.amount.replace(',', '.')) || 0;
-    if (!creditDraft.clientId || amount <= 0) return;
-    const tx: CreditTx = {
-      id: crypto.randomUUID(),
-      date: todayKey(),
-      customer: selectedClient?.name || "",
-      amount: Number(amount.toFixed(2)),
-      note: creditDraft.note || undefined,
-      kind: creditDraft.op === 'credit' ? 'sale' : 'payment',
-      category: creditDraft.category,
-    };
+  const addPaidCredit = () => {
+    const amount = parseFloat(payDraft.amount.replace(',', '.')) || 0;
+    if (!payDraft.clientId || amount <= 0) return;
+    const customer = clientById[payDraft.clientId]?.name || '';
+    const tx: CreditTx = { id: crypto.randomUUID(), date: todayKey(), customer, amount: Number(amount.toFixed(2)), kind: 'payment' };
     setCreditLedger((s) => [...s, tx]);
-    if (creditDraft.op === 'credit') {
-      const cur = store.get<number>("gs.credits.today", 0) + tx.amount;
-      store.set("gs.credits.today", cur);
-      setCreditsSumToday(cur);
-    } else {
-      const curPaid = store.get<number>("gs.credits.paid.today", 0) + tx.amount;
-      store.set("gs.credits.paid.today", curPaid);
-      setPaidCreditsToday(curPaid);
+    const curPaid = store.get<number>("gs.credits.paid.today", 0) + tx.amount;
+    store.set("gs.credits.paid.today", curPaid);
+    setPaidCreditsToday(curPaid);
+    setPayDraft({ clientId: payDraft.clientId, amount: "" });
+  };
+
+  const addCreditSale = () => {
+    const amount = parseFloat(creditSaleDraft.amount.replace(',', '.')) || 0;
+    if (!creditSaleDraft.clientId || amount <= 0) return;
+    // Freeze Overall Totals on first credit sale
+    const prevCredits = store.get<number>("gs.credits.today", 0);
+    if (prevCredits === 0 && overallFixedTP == null) {
+      const snapTP = Number(overallDisplayTotals.tProf.toFixed(2));
+      const snapNP = Number(overallDisplayTotals.nProf.toFixed(2));
+      setOverallFixedTP(snapTP);
+      setOverallFixedNP(snapNP);
+      store.set("gs.overall.fixed.tp", snapTP);
+      store.set("gs.overall.fixed.np", snapNP);
     }
-    setCreditDraft({ clientId: "", op: 'credit', amount: "", note: "", category: creditDraft.category });
+    const customer = clientById[creditSaleDraft.clientId]?.name || '';
+    const tx: CreditTx = { id: crypto.randomUUID(), date: todayKey(), customer, amount: Number(amount.toFixed(2)), kind: 'sale', category: creditSaleDraft.category };
+    setCreditLedger((s) => [...s, tx]);
+    const cur = store.get<number>("gs.credits.today", 0) + tx.amount;
+    store.set("gs.credits.today", cur);
+    setCreditsSumToday(cur);
+    setCreditSaleDraft({ clientId: creditSaleDraft.clientId, amount: "", category: creditSaleDraft.category });
   };
 
-  const todaysCreditTx = useMemo(() => creditLedger.filter(tx => tx.date === todayKey()), [creditLedger]);
-
-  const addExpense = () => {
-    const amount = parseFloat(expDraft.amount.replace(",", ".")) || 0;
-    if (!expDraft.name || amount <= 0) return;
-    const forceNP = expDraft.type === 'Worker payment';
-    const newItem: OtherExpense = {
-      id: crypto.randomUUID(),
-      date: todayKey(),
-      name: expDraft.name,
-      type: expDraft.type,
-      amount: Number(amount.toFixed(2)),
-      deductFrom: forceNP ? 'NP' : expDraft.deductFrom,
-      note: expDraft.note || undefined,
-      workerId: expDraft.type === 'Worker payment' ? expDraft.workerId : undefined,
-    };
-    setOtherItems((s) => [newItem, ...s]);
-
-    // If worker payment, record in worker history and update last payment
-    if (newItem.type === 'Worker payment' && newItem.workerId) {
-      setWorkers((prev) => prev.map(w => {
-        if (w.id !== newItem.workerId) return w;
-        const payments = [...(w.payments || []), { date: newItem.date, amount: -newItem.amount, note: newItem.name }];
-        return { ...w, payments, lastPayment: { date: newItem.date, amount: -newItem.amount } };
-      }));
-    }
-
-    setExpDraft({ name: "", type: "Other", amount: "", deductFrom: "NP", note: "" });
-  };
-
-  const removeExpense = (id: string) => setOtherItems((s) => s.filter(i => i.id !== id));
-
-  const resetPrev = (id: string) => {
-    const v = prompt("Enter previous reading (P.N)", String(readings[id]?.prev ?? 0));
-    if (v == null) return;
-    const n = parseFloat(v) || 0;
-    setReadings((s) => ({ ...s, [id]: { prev: n } }));
-  };
+  // Cashier's Starting Money state moved above
 
   return (
     <div className="bg-background">
@@ -565,7 +642,7 @@ export default function MainPage() {
           <div className="grid grid-cols-12 gap-2 text-sm">
             <div className="col-span-6">
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Total Liters:</span>
+                <span className="text-muted-foreground">Liters:</span>
                 <span className="font-semibold">{totals.liters.toFixed(2)}</span>
               </div>
               <div className="flex items-center gap-2">
@@ -602,73 +679,10 @@ export default function MainPage() {
       <Card className="bg-card mt-4">
         <CardHeader>
           <CardTitle>#Oils</CardTitle>
-          <CardDescription>Liters by readings or direct entry, and bottles. Prices pulled from Oil Tank.</CardDescription>
+          <CardDescription>Store products only. Manage stock in Store page.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-12 gap-2 items-end">
-            <div className="col-span-3 text-sm font-medium">Liters via Readings</div>
-            <div className="col-span-3 space-y-1">
-              <Label className="text-xs">Yesterday</Label>
-              <div className="flex gap-2">
-                <Input value={oil.prev} readOnly className="bg-muted/30" />
-                <Button type="button" variant="secondary" size="sm" onClick={resetOilPrev}>Edit</Button>
-              </div>
-            </div>
-            <div className="col-span-3 space-y-1">
-              <Label className="text-xs">Today</Label>
-              <Input value={oil.today}
-                     onChange={(e) => setOil((s: any) => ({ ...s, today: e.target.value.replace(",", ".") }))}
-                     inputMode="decimal" placeholder="0" />
-            </div>
-            <div className="col-span-3 flex items-center gap-2">
-              <Label className="text-xs">Deduct from tank</Label>
-              <Switch checked={!!oil.deductLiters} onCheckedChange={(v) => setOil((s: any) => ({ ...s, deductLiters: v }))} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-12 gap-2 items-end">
-            <div className="col-span-3 text-sm font-medium">Liters Direct</div>
-            <div className="col-span-3 space-y-1">
-              <Label className="text-xs">Liters</Label>
-              <Input value={oil.directLiters}
-                     onChange={(e) => setOil((s: any) => ({ ...s, directLiters: e.target.value.replace(",", ".") }))}
-                     inputMode="decimal" placeholder="0" />
-            </div>
-            <div className="col-span-6 text-sm">
-              <div className="text-xs text-muted-foreground">Price: {oilPrice} • Profit/L: {oilProfitPerL}</div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-12 gap-2 items-end">
-            <div className="col-span-3 text-sm font-medium">Bottles</div>
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Sold</Label>
-              <Input value={oil.bottles}
-                     onChange={(e) => setOil((s: any) => ({ ...s, bottles: e.target.value.replace(/[^0-9]/g, '') }))}
-                     inputMode="numeric" placeholder="0" />
-            </div>
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Price/Unit</Label>
-              <Input value={oil.bottlePrice}
-                     onChange={(e) => setOil((s: any) => ({ ...s, bottlePrice: parseFloat(e.target.value) || 0 }))}
-                     inputMode="decimal" />
-            </div>
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Profit/Unit</Label>
-              <Input value={oil.bottleProfit}
-                     onChange={(e) => setOil((s: any) => ({ ...s, bottleProfit: parseFloat(e.target.value) || 0 }))}
-                     inputMode="decimal" />
-            </div>
-            <div className="col-span-3 flex items-center gap-2">
-              <Label className="text-xs">Deduct stock</Label>
-              <Switch checked={!!oil.deductBottles} onCheckedChange={(v) => setOil((s: any) => ({ ...s, deductBottles: v }))} />
-            </div>
-            <div className="col-span-12 text-xs text-muted-foreground">Stock: {oil.bottlesStock || 0} bottles</div>
-          </div>
-
-          <Separator />
-
-          {/* Products (in oil section, direct sales) */}
+          {/* Products (only) */}
           <div className="space-y-2">
             {visibleStoreItems.length === 0 ? (
               <div className="text-sm text-muted-foreground">No products in stock.</div>
@@ -676,18 +690,19 @@ export default function MainPage() {
               <div className="space-y-2 text-sm">
                 {storeRows.map(({ it, prev, todayLeft, sold, tProf, nProf }) => (
                   <div key={it.id} className="grid grid-cols-12 gap-2 items-end border rounded-md p-2">
-                    <div className="col-span-3 font-medium truncate" title={it.name}>{it.name}</div>
+                    <div className="col-span-3">
+                      <div className="font-medium truncate" title={it.name}>{it.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        TP: <span className="font-semibold">{tProf.toFixed(2)} DZD</span> · NP: <span className="font-semibold">{nProf.toFixed(2)} DZD</span>
+                      </div>
+                    </div>
                     <div className="col-span-2">Prev: {prev}</div>
                     <div className="col-span-2">Price: {Number(it.price || 0).toFixed(2)}</div>
                     <div className="col-span-2">NP/U: {Number(it.profit || 0).toFixed(2)}</div>
                     <div className="col-span-3 space-y-1">
                       <Label className="text-xs">Today Left</Label>
-                      <Input inputMode="numeric" value={storeLeft[it.id] || ""} onChange={(e) => setStoreLeft(s => ({ ...s, [it.id]: e.target.value }))} placeholder="0" />
-                    </div>
-                    <div className="col-span-12 grid grid-cols-12 gap-2 text-xs">
-                      <div className="col-span-4">Sold: <span className="font-semibold">{sold}</span></div>
-                      <div className="col-span-4">TP: <span className="font-semibold">{tProf.toFixed(2)} DZD</span></div>
-                      <div className="col-span-4">NP: <span className="font-semibold">{nProf.toFixed(2)} DZD</span></div>
+                      <Input inputMode="numeric" value={storeLeft[it.id] || ""} onChange={(e) => setStoreLeft(s => ({ ...s, [it.id]: e.target.value }))} placeholder="" />
+                      <div className="text-xs text-muted-foreground">Left now: <span className="font-semibold">{todayLeft}</span> · Sold: <span className="font-semibold">{sold}</span></div>
                     </div>
                   </div>
                 ))}
@@ -697,20 +712,6 @@ export default function MainPage() {
                 </div>
               </div>
             )}
-          </div>
-
-          <div className="grid grid-cols-12 gap-2 text-sm">
-            <div className="col-span-6 space-y-1">
-              <div>Liters (readings): {oilLitersByReadings.toFixed(2)} L</div>
-              <div>Liters (direct): {oilLitersDirect.toFixed(2)} L</div>
-              <div>Bottles sold: {oilBottlesSold}</div>
-            </div>
-            <div className="col-span-6 space-y-1">
-              <div>TProf (liters): {oilTProf.toFixed(2)} DZD</div>
-              <div>NP (liters): {oilNProf.toFixed(2)} DZD</div>
-              <div>TProf (bottles): {oilBottlesTProf.toFixed(2)} DZD</div>
-              <div>NP (bottles): {oilBottlesNProf.toFixed(2)} DZD</div>
-            </div>
           </div>
         </CardContent>
       </Card>
@@ -745,7 +746,7 @@ export default function MainPage() {
               <Label className="text-xs">Deduct stock</Label>
               <Switch checked={!!gazb.deduct} onCheckedChange={(v) => setGazb((s: any) => ({ ...s, deduct: v }))} />
             </div>
-            <div className="col-span-12 text-xs text-muted-foreground">Stock: {gazb.stock || 0} bottles</div>
+            <div className="col-span-12 text-xs text-muted-foreground">Stock: {gazb.stock || 0} bottles · Left now: <span className="font-semibold">{Math.max(0, (gazb.stock || 0) - (gazbSold || 0))}</span></div>
           </div>
 
           <div className="text-sm">
@@ -755,78 +756,227 @@ export default function MainPage() {
         </CardContent>
       </Card>
 
-      {/* Selling with Credit */}
+      {/* Paid Credits Today */}
       <Card className="bg-card mt-4">
         <CardHeader>
-          <CardTitle>#Selling with Credit</CardTitle>
-          <CardDescription>Choose client from list, record Credit or Payment. Affects Total Profit only and updates client account.</CardDescription>
+          <CardTitle>#Paid Credits Today</CardTitle>
+          <CardDescription>Record payments received from clients. Updates client balance and adds to totals.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-12 gap-2 items-end border rounded-md p-3">
-            <div className="col-span-3 space-y-1">
-              <Label className="text-xs">Client</Label>
-              <Select value={creditDraft.clientId} onValueChange={(v) => setCreditDraft(d => ({ ...d, clientId: v }))}>
-                <SelectTrigger className="w-full"><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {creditClients.length === 0 ? (
-                    <SelectItem value="no_clients" disabled>No clients — add in Credits page</SelectItem>
-                  ) : (
-                    creditClients.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+        <CardContent className="grid grid-cols-12 gap-2 items-end">
+          <div className="col-span-5 space-y-1">
+            <Label className="text-xs">Client</Label>
+            <Select value={payDraft.clientId} onValueChange={(v) => setPayDraft(d => ({ ...d, clientId: v }))}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Select client" /></SelectTrigger>
+              <SelectContent>
+                {creditClients.length === 0 ? (
+                  <SelectItem value="no_clients" disabled>No clients — add in Credits page</SelectItem>
+                ) : (
+                  creditClients.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="col-span-3 space-y-1">
+            <Label className="text-xs">Amount (DZD)</Label>
+            <Input inputMode="decimal" value={payDraft.amount} onChange={(e) => setPayDraft(d => ({ ...d, amount: e.target.value }))} placeholder="0" />
+          </div>
+          <div className="col-span-4">
+            <Button className="w-full" onClick={addPaidCredit} disabled={!payDraft.clientId}>Record Payment</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Cashier's Starting Money */}
+      <Card className="bg-card mt-4">
+        <CardHeader>
+          <CardTitle>#Cashier's Starting Money</CardTitle>
+          <CardDescription>Money cashier had at the start of the day (for change).</CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-12 gap-2 items-end">
+          <div className="col-span-4 space-y-1">
+            <Label className="text-xs">Starting Money (DZD)</Label>
+            <Input inputMode="decimal" value={String(cashierChange)} onChange={(e) => setCashierChange(parseFloat(e.target.value) || 0)} placeholder="0" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* OVERALL */}
+      <Card className="bg-card mt-4">
+        <CardHeader>
+          <CardTitle>Overall Totals</CardTitle>
+          <CardDescription>Pumps + Oils + GazB + Paid Credits + Starting Money</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          {/* Pre Totals */}
+          <div className="grid grid-cols-12 gap-2 items-center">
+            <div className="col-span-6 space-y-1">
+              <div className="flex items-center gap-2"><span className="text-muted-foreground">Combined TP (incl. Paid + Start):</span><span className="font-semibold">{combined.tProf.toFixed(2)} DZD</span></div>
+              <div className="flex items-center gap-2"><span className="text-muted-foreground">Combined NP (incl. Start):</span><span className="font-semibold">{combined.nProf.toFixed(2)} DZD</span></div>
             </div>
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Operation</Label>
-              <Select value={creditDraft.op} onValueChange={(v) => setCreditDraft(d => ({ ...d, op: v as 'credit'|'payment' }))}>
-                <SelectTrigger className="w-full"><SelectValue placeholder="Choose" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="credit">Credit</SelectItem>
-                  <SelectItem value="payment">Payment</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Type</Label>
-              <Select value={creditDraft.category} onValueChange={(v) => setCreditDraft(d => ({ ...d, category: v as 'Fuel'|'Store'|'Other' }))}>
-                <SelectTrigger className="w-full"><SelectValue placeholder="Type" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Fuel">Fuel</SelectItem>
-                  <SelectItem value="Store">Store</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Amount (DZD)</Label>
-              <Input inputMode="decimal" value={creditDraft.amount} onChange={(e) => setCreditDraft(d => ({ ...d, amount: e.target.value }))} placeholder="0" />
-            </div>
-            <div className="col-span-3 space-y-1">
-              <Label className="text-xs">Note</Label>
-              <Input value={creditDraft.note} onChange={(e) => setCreditDraft(d => ({ ...d, note: e.target.value }))} placeholder="Optional note" />
-            </div>
-            <div className="col-span-12">
-              <Button onClick={addCreditTx} disabled={!creditDraft.clientId}>Add</Button>
+            <div className="col-span-6 text-right">
+              <Button onClick={saveDay}>Save Day</Button>
             </div>
           </div>
 
-          {/* Today list */}
-          {todaysCreditTx.length === 0 ? (
-            <div className="text-sm text-muted-foreground">No credit operations today.</div>
-          ) : (
-            <div className="space-y-2 max-h-48 overflow-auto text-sm">
-              {todaysCreditTx.map((tx) => (
-                <div key={tx.id} className="grid grid-cols-12 gap-2 items-center border rounded-md p-2">
-                  <div className="col-span-4 font-medium">{tx.customer}</div>
-                  <div className="col-span-3">{tx.kind === 'sale' ? (tx.category || 'Sale') : 'Payment'}</div>
-                  <div className={`col-span-3 font-semibold ${tx.kind === 'sale' ? 'text-green-600' : 'text-red-600'}`}>{tx.kind === 'sale' ? '+ ' : '- '} {tx.amount.toFixed(2)} DZD</div>
-                  <div className="col-span-2 text-xs text-muted-foreground text-right">{tx.date}</div>
-                </div>
-              ))}
+          <Separator />
+
+          {/* Sections Summary */}
+          <div className="grid grid-cols-12 gap-4">
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">Pumps</div>
+              <div>TP: {totals.tProf.toFixed(2)} DZD</div>
+              <div>NP: {totals.nProf.toFixed(2)} DZD</div>
             </div>
-          )}
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">Oils (liters)</div>
+              <div>TP: {oilTProf.toFixed(2)} DZD</div>
+              <div>NP: {oilNProf.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">Oil Bottles</div>
+              <div>TP: {oilBottlesTProf.toFixed(2)} DZD</div>
+              <div>NP: {oilBottlesNProf.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">GazB Bottles</div>
+              <div>TP: {gazbTProf.toFixed(2)} DZD</div>
+              <div>NP: {gazbNProf.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">Products</div>
+              <div>TP: {storeTotals.tProf.toFixed(2)} DZD</div>
+              <div>NP: {storeTotals.nProf.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">Paid Credits</div>
+              <div>TP: +{paidCreditsToday.toFixed(2)} DZD</div>
+              <div className="text-muted-foreground">NP: —</div>
+            </div>
+            <div className="col-span-3 space-y-1">
+              <div className="font-medium">Starting Money</div>
+              <div>TP: +{(cashierChange || 0).toFixed(2)} DZD</div>
+              <div className="text-muted-foreground">NP: —</div>
+            </div>
+          </div>
+
+          {/* Summary of adds/minus */}
+          <div className="grid grid-cols-12 gap-4">
+            <div className="col-span-6">
+              <div className="font-medium">Summary (TP)</div>
+              {(tpAdj === 0 && creditsSumToday === 0 && paidCreditsToday === 0 && (cashierChange || 0) === 0) ? (
+                <div className="text-muted-foreground">No adjustments.</div>
+              ) : (
+                <ul className="list-disc pl-5 space-y-1">
+                  {/* List payments with client names; hidden after Save Day */}
+                  {dayClosedOn === todayKey() ? null : creditLedger.filter(tx => tx.date === todayKey() && tx.kind === 'payment').map(tx => (
+                    <li key={tx.id} className="text-green-600">+ Payment from {tx.customer || 'Unknown'}: {tx.amount.toFixed(2)} DZD</li>
+                  ))}
+                  {/* List credit sales with client names; hidden after Save Day (moved back as requested) */}
+                  {dayClosedOn === todayKey() ? null : creditLedger.filter(tx => tx.date === todayKey() && tx.kind === 'sale').map(tx => (
+                    <li key={tx.id} className="text-red-600">- Credit sale to {tx.customer || 'Unknown'}: {tx.amount.toFixed(2)} DZD</li>
+                  ))}
+                  {(cashierChange || 0) > 0 && (
+                    <li className="text-green-600">+ Starting money: {(cashierChange || 0).toFixed(2)} DZD</li>
+                  )}
+                  {otherItems.filter(i => i.deductFrom === 'TP').map(i => (
+                    <li key={i.id} className="text-red-600">- {i.name} ({i.type}): {i.amount.toFixed(2)} DZD</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="col-span-6">
+              <div className="font-medium">Summary (NP)</div>
+              {(npAdj === 0) ? (
+                <div className="text-muted-foreground">No adjustments.</div>
+              ) : (
+                <ul className="list-disc pl-5 space-y-1">
+                  {otherItems.filter(i => i.deductFrom === 'NP').map(i => (
+                    <li key={i.id} className="text-red-600">- {i.name} ({i.type}): {i.amount.toFixed(2)} DZD</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Final totals row (Overall card stays fixed; no credit deduction here) */}
+          <div className="grid grid-cols-12 gap-2 items-center text-sm">
+            <div className="col-span-6">
+              <div className="text-muted-foreground">Total Profite</div>
+              <div className="font-semibold">{displayTP.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-6">
+              <div className="text-muted-foreground">Net Profite</div>
+              <div className="font-semibold">{displayNP.toFixed(2)} DZD</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Sales with Credit (after totals) */}
+      <Card className="bg-card mt-4">
+        <CardHeader>
+          <CardTitle>#Sales with Credit</CardTitle>
+          <CardDescription>Record new credit taken by clients. Overall Totals remain unchanged; see Credits Impact below.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-12 gap-2 items-end">
+          <div className="col-span-4 space-y-1">
+            <Label className="text-xs">Client</Label>
+            <Select value={creditSaleDraft.clientId} onValueChange={(v) => setCreditSaleDraft(d => ({ ...d, clientId: v }))}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Select client" /></SelectTrigger>
+              <SelectContent>
+                {creditClients.length === 0 ? (
+                  <SelectItem value="no_clients" disabled>No clients — add in Credits page</SelectItem>
+                ) : (
+                  creditClients.map(c => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="col-span-3 space-y-1">
+            <Label className="text-xs">Type</Label>
+            <Select value={creditSaleDraft.category} onValueChange={(v) => setCreditSaleDraft(d => ({ ...d, category: v as 'Fuel'|'Store'|'Other' }))}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Type" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Fuel">Fuel</SelectItem>
+                <SelectItem value="Store">Store</SelectItem>
+                <SelectItem value="Other">Other</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="col-span-3 space-y-1">
+            <Label className="text-xs">Amount (DZD)</Label>
+            <Input inputMode="decimal" value={creditSaleDraft.amount} onChange={(e) => setCreditSaleDraft(d => ({ ...d, amount: e.target.value }))} placeholder="0" />
+          </div>
+          <div className="col-span-2">
+            <Button className="w-full" onClick={addCreditSale} disabled={!creditSaleDraft.clientId}>Add Credit</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Credits Impact (does not alter Overall Totals card) */}
+      <Card className="bg-card mt-4">
+        <CardHeader>
+          <CardTitle>Adjusted Total after Credits</CardTitle>
+          <CardDescription>Overall Total (fixed) minus Sales with Credits.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="grid grid-cols-12 gap-2">
+            <div className="col-span-4">
+              <div className="text-muted-foreground">Overall Total (fixed)</div>
+              <div className="font-semibold">{displayTP.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-4">
+              <div className="text-muted-foreground">Sales with Credits</div>
+              <div className="font-semibold text-red-600">- {creditsSumToday.toFixed(2)} DZD</div>
+            </div>
+            <div className="col-span-4">
+              <div className="text-muted-foreground">Adjusted Total</div>
+              <div className="font-semibold">{adjustedTP.toFixed(2)} DZD</div>
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground">Note: Adjusted Total = Overall Total − Sales with Credits. Overall Total remains unchanged as reference.</div>
         </CardContent>
       </Card>
 
@@ -913,121 +1063,95 @@ export default function MainPage() {
         </CardContent>
       </Card>
 
-      {/* Cashier Change */}
+      {/* Cashier Closing Summary */}
       <Card className="bg-card mt-4">
         <CardHeader>
-          <CardTitle>#Cashier Change</CardTitle>
-          <CardDescription>Amount of change left with the cashier today. Added to Net Profit.</CardDescription>
+          <CardTitle>Cashier Closing Summary</CardTitle>
+          <CardDescription>Validate closing cash vs expected and carry over starting money.</CardDescription>
         </CardHeader>
-        <CardContent className="grid grid-cols-12 gap-2 items-end">
-          <div className="col-span-3 space-y-1">
-            <Label className="text-xs">Change (DZD)</Label>
-            <Input inputMode="decimal" value={String(cashierChange)} onChange={(e) => setCashierChange(parseFloat(e.target.value) || 0)} placeholder="0" />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* OVERALL */}
-      <Card className="bg-card mt-4">
-        <CardHeader>
-          <CardTitle>Overall Totals</CardTitle>
-          <CardDescription>Pumps + Oils + GazB + Other Expenses</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          {/* Pre Totals */}
-          <div className="grid grid-cols-12 gap-2 items-center">
-            <div className="col-span-6 space-y-1">
-              <div className="flex items-center gap-2"><span className="text-muted-foreground">Total Profite (TP):</span><span className="font-semibold">{overall.tProf.toFixed(2)} DZD</span></div>
-              <div className="flex items-center gap-2"><span className="text-muted-foreground">Net Profite (NP):</span><span className="font-semibold">{overall.nProf.toFixed(2)} DZD</span></div>
+        <CardContent className="space-y-4 text-sm">
+          {/* Inputs */}
+          <div className="grid grid-cols-12 gap-2 items-end">
+            <div className="col-span-3 space-y-1">
+              <Label className="text-xs">Starting Money (DZD)</Label>
+              <Input inputMode="decimal" value={String(cashierChange)} onChange={(e) => setCashierChange(parseFloat(e.target.value) || 0)} placeholder="0" />
             </div>
-            <div className="col-span-6 text-right">
-              <Button onClick={saveDay}>Save Day</Button>
+            <div className="col-span-3 space-y-1">
+              <Label className="text-xs">Today's Sales (auto)</Label>
+              <Input readOnly className="bg-muted/30" value={todaySales.toFixed(2)} />
+            </div>
+            <div className="col-span-3 space-y-1">
+              <Label className="text-xs">New Credits Given Today</Label>
+              <Input inputMode="decimal" value={closingNewCreditsOverride} onChange={(e) => setClosingNewCreditsOverride(e.target.value)} placeholder={creditsSumToday.toFixed(2)} />
+            </div>
+            <div className="col-span-3 space-y-1">
+              <Label className="text-xs">Credits Paid Today</Label>
+              <Input inputMode="decimal" value={closingPaidOverride} onChange={(e) => setClosingPaidOverride(e.target.value)} placeholder={paidCreditsToday.toFixed(2)} />
+            </div>
+            <div className="col-span-3 space-y-1">
+              <Label className="text-xs">Actual Cash at Closing</Label>
+              <Input inputMode="decimal" value={closingActualCash} onChange={(e) => setClosingActualCash(e.target.value)} placeholder="0" />
+            </div>
+            <div className="col-span-3 space-y-1">
+              <Label className="text-xs">Cashier (worker)</Label>
+              <Select value={closingCashierId} onValueChange={(v) => setClosingCashierId(v)}>
+                <SelectTrigger className="w-full"><SelectValue placeholder="Select cashier" /></SelectTrigger>
+                <SelectContent>
+                  {workers.length === 0 ? (
+                    <SelectItem value="no_workers" disabled>No workers</SelectItem>
+                  ) : (
+                    workers.map(w => (<SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>))
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
-          <Separator />
-
-          {/* Sections Summary */}
+          {/* Calculations */}
           <div className="grid grid-cols-12 gap-4">
-            <div className="col-span-3 space-y-1">
-              <div className="font-medium">Pumps</div>
-              <div>TP: {totals.tProf.toFixed(2)} DZD</div>
-              <div>NP: {totals.nProf.toFixed(2)} DZD</div>
+            <div className="col-span-4">
+              <div className="text-muted-foreground">Expected Sales Cash</div>
+              <div className="font-semibold">{expectedSalesCash.toFixed(2)} DZD</div>
             </div>
-            <div className="col-span-3 space-y-1">
-              <div className="font-medium">Oils (liters)</div>
-              <div>TP: {oilTProf.toFixed(2)} DZD</div>
-              <div>NP: {oilNProf.toFixed(2)} DZD</div>
+            <div className="col-span-4">
+              <div className="text-muted-foreground">Expected Closing</div>
+              <div className="font-semibold">{expectedClosing.toFixed(2)} DZD</div>
             </div>
-            <div className="col-span-3 space-y-1">
-              <div className="font-medium">Oil Bottles</div>
-              <div>TP: {oilBottlesTProf.toFixed(2)} DZD</div>
-              <div>NP: {oilBottlesNProf.toFixed(2)} DZD</div>
-            </div>
-            <div className="col-span-3 space-y-1">
-              <div className="font-medium">GazB Bottles</div>
-              <div>TP: {gazbTProf.toFixed(2)} DZD</div>
-              <div>NP: {gazbNProf.toFixed(2)} DZD</div>
-            </div>
-            <div className="col-span-3 space-y-1">
-              <div className="font-medium">Products</div>
-              <div>TP: {storeTotals.tProf.toFixed(2)} DZD</div>
-              <div>NP: {storeTotals.nProf.toFixed(2)} DZD</div>
+            <div className="col-span-4">
+              <div className="text-muted-foreground">Difference</div>
+              <div className={closingDiff === 0 ? "font-semibold" : (closingDiff < 0 ? "font-semibold text-red-600" : "font-semibold text-green-600")}>{closingDiff.toFixed(2)} DZD</div>
             </div>
           </div>
 
-          {/* Summary of adds/minus */}
-          <div className="grid grid-cols-12 gap-4">
-            <div className="col-span-6">
-              <div className="font-medium">Summary (TP)</div>
-              {(tpAdj === 0 && creditsSumToday === 0 && paidCreditsToday === 0) ? (
-                <div className="text-muted-foreground">No adjustments.</div>
-              ) : (
-                <ul className="list-disc pl-5 space-y-1">
-                  {creditsSumToday > 0 && (
-                    <li className="text-green-600">+ Credit sales today: {creditsSumToday.toFixed(2)} DZD</li>
-                  )}
-                  {paidCreditsToday > 0 && (
-                    <li className="text-red-600">- Paid credits today: {paidCreditsToday.toFixed(2)} DZD</li>
-                  )}
-                  {otherItems.filter(i => i.deductFrom === 'TP').map(i => (
-                    <li key={i.id} className="text-red-600">- {i.name} ({i.type}): {i.amount.toFixed(2)} DZD</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="col-span-6">
-              <div className="font-medium">Summary (NP)</div>
-              {(npAdj === 0 && (cashierChange || 0) === 0) ? (
-                <div className="text-muted-foreground">No adjustments.</div>
-              ) : (
-                <ul className="list-disc pl-5 space-y-1">
-                  {cashierChange > 0 && (
-                    <li key="cashier-change" className="text-green-600">+ Cashier change: {cashierChange.toFixed(2)} DZD</li>
-                  )}
-                  {otherItems.filter(i => i.deductFrom === 'NP').map(i => (
-                    <li key={i.id} className="text-red-600">- {i.name} ({i.type}): {i.amount.toFixed(2)} DZD</li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          {/* Status */}
+          <div className="text-sm">
+            {closingStatus === 'ok' && <div className="text-green-600">✅ Cashier balance correct.</div>}
+            {closingStatus === 'short' && <div className="text-red-600">❌ Cashier is short by {Math.abs(closingDiff).toFixed(2)} DZD.</div>}
+            {closingStatus === 'extra' && <div className="text-amber-600">⚡ Cashier has {Math.abs(closingDiff).toFixed(2)} DZD more than expected.</div>}
           </div>
 
-          <Separator />
-
-          {/* Final totals row */}
-          <div className="grid grid-cols-12 gap-2 items-center text-sm">
-            <div className="col-span-4">
-              <div className="text-muted-foreground">Total Profite</div>
-              <div className="font-semibold">{finalTotals.tProf.toFixed(2)} DZD</div>
-            </div>
-            <div className="col-span-4">
-              <div className="text-muted-foreground">Net Profite</div>
-              <div className="font-semibold">{finalTotals.nProf.toFixed(2)} DZD</div>
-            </div>
-            <div className="col-span-4">
-              <div className="text-muted-foreground">Credite sales today</div>
-              <div className="font-semibold text-green-600">+ {Number(creditsToday || 0).toFixed(2)} DZD</div>
+          {/* Summary Card */}
+          <div className="border rounded-md p-3 grid grid-cols-12 gap-2">
+            <div className="col-span-3">Starting Money: <span className="font-semibold">{(cashierChange || 0).toFixed(2)} DZD</span></div>
+            <div className="col-span-3">Expected Closing: <span className="font-semibold">{expectedClosing.toFixed(2)} DZD</span></div>
+            <div className="col-span-3">Actual Closing: <span className="font-semibold">{actualCash.toFixed(2)} DZD</span></div>
+            <div className="col-span-3">Difference: <span className="font-semibold">{closingDiff.toFixed(2)} DZD</span></div>
+            <div className="col-span-12 text-right">
+              <Button onClick={() => {
+                // Apply difference to selected cashier worker (if any)
+                if (closingCashierId && Math.abs(closingDiff) > 0.009) {
+                  setWorkers(prev => prev.map(w => w.id === closingCashierId ? { ...w, balance: Number(((w.balance || 0) + closingDiff).toFixed(2)) } : w));
+                }
+                // Mark day closed in UI (hide credit name lists in summaries)
+                setDayClosedOn(todayKey());
+                if (Math.abs(closingDiff) < 0.01) {
+                  // carry over same starting money to next day by keeping it persisted
+                  store.set("gs.cashier.change.today", cashierChange || 0);
+                  alert("Validated. Starting Money carried over for tomorrow.");
+                } else {
+                  alert(closingCashierId ? "Applied difference to cashier's balance." : "Difference exists. Select a cashier to apply difference, or resolve to 0 to carry over.");
+                }
+              }}>Validate & Carry Over</Button>
             </div>
           </div>
         </CardContent>

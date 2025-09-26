@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 // Local storage helpers
 const store = {
@@ -41,6 +42,10 @@ type CreditClient = {
   id: string;
   name: string;
   group: 'Companies' | 'Entrepreneurs' | 'Agricultures' | 'Normal People' | 'Other';
+  // extra info
+  phone?: string;
+  address?: string;
+  note?: string;
 };
 
 export default function CreditsPage() {
@@ -72,17 +77,22 @@ export default function CreditsPage() {
   }, [ledger]);
 
   // Drafts
-  const [clientDraft, setClientDraft] = useState({ name: "", group: 'Companies' as CreditClient['group'] });
+  const [clientDraft, setClientDraft] = useState({ name: "", group: 'Companies' as CreditClient['group'], phone: "", address: "", note: "" });
   const [saleDraft, setSaleDraft] = useState({ clientId: "", amount: "", category: 'Fuel' as 'Fuel'|'Store'|'Other', note: "" });
   const [payDraft, setPayDraft] = useState({ clientId: "", amount: "", note: "" });
+  const [showClientExtra, setShowClientExtra] = useState(false);
+
+  const [openClientId, setOpenClientId] = useState<string | null>(null);
+  const openClient = openClientId ? clientById[openClientId] : undefined;
+  const [editDraft, setEditDraft] = useState<{ phone?: string; address?: string; note?: string; group?: CreditClient['group'] }>({});
 
   const addClient = () => {
     const name = clientDraft.name.trim();
     if (!name) return;
     // Prevent duplicates by name
     if (clients.some(c => c.name.toLowerCase() === name.toLowerCase())) return;
-    setClients(s => [...s, { id: crypto.randomUUID(), name, group: clientDraft.group }]);
-    setClientDraft({ name: "", group: clientDraft.group });
+    setClients(s => [...s, { id: crypto.randomUUID(), name, group: clientDraft.group, phone: clientDraft.phone?.trim() || undefined, address: clientDraft.address?.trim() || undefined, note: clientDraft.note?.trim() || undefined }]);
+    setClientDraft({ name: "", group: clientDraft.group, phone: "", address: "", note: "" });
   };
 
   const addSale = () => {
@@ -138,9 +148,29 @@ export default function CreditsPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="col-span-2">
+              <div className="col-span-2 flex gap-2">
                 <Button className="w-full" onClick={addClient}>Add</Button>
               </div>
+              <div className="col-span-12 flex items-center gap-2 text-xs pt-2">
+                <Button variant="secondary" size="sm" onClick={() => setShowClientExtra(v => !v)}>{showClientExtra ? 'Hide extra' : 'More info'}</Button>
+                <span className="text-muted-foreground">Optional: phone, address, note</span>
+              </div>
+              {showClientExtra && (
+                <div className="col-span-12 grid grid-cols-12 gap-2">
+                  <div className="col-span-3 space-y-1">
+                    <Label className="text-xs">Phone</Label>
+                    <Input value={clientDraft.phone} onChange={(e) => setClientDraft(d => ({ ...d, phone: e.target.value }))} placeholder="e.g. 0555..." />
+                  </div>
+                  <div className="col-span-5 space-y-1">
+                    <Label className="text-xs">Address</Label>
+                    <Input value={clientDraft.address} onChange={(e) => setClientDraft(d => ({ ...d, address: e.target.value }))} placeholder="City, Street" />
+                  </div>
+                  <div className="col-span-4 space-y-1">
+                    <Label className="text-xs">Note</Label>
+                    <Input value={clientDraft.note} onChange={(e) => setClientDraft(d => ({ ...d, note: e.target.value }))} placeholder="Notes" />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -211,20 +241,38 @@ export default function CreditsPage() {
             </div>
           </div>
 
-          {/* Balances */}
+          {/* Clients List as Cards */}
           <div className="space-y-2">
-            <div className="font-medium">Balances</div>
+            <div className="font-medium">Clients List</div>
             {clients.length === 0 ? (
               <div className="text-sm text-muted-foreground">No clients yet.</div>
             ) : (
-              <div className="space-y-1 text-sm max-h-40 overflow-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {clients.map(c => {
                   const bal = balances.get(c.name) || 0;
                   return (
-                    <div key={c.id} className="grid grid-cols-12 gap-2 items-center border rounded-md p-2">
-                      <div className="col-span-8 font-medium">{c.name} <span className="text-xs text-muted-foreground">• {c.group}</span></div>
-                      <div className={`col-span-4 text-right font-semibold ${bal >= 0 ? 'text-orange-600' : 'text-green-600'}`}>{bal.toFixed(2)} DZD</div>
-                    </div>
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setOpenClientId(c.id);
+                        setEditDraft({ phone: c.phone, address: c.address, note: c.note, group: c.group });
+                      }}
+                      className="text-left"
+                    >
+                      <Card className="hover:shadow-md transition-shadow">
+                        <CardHeader className="p-4">
+                          <CardTitle className="text-base">{c.name}</CardTitle>
+                          <CardDescription className="text-xs">{c.group}</CardDescription>
+                        </CardHeader>
+                        <CardContent className="p-4 pt-0 text-sm space-y-1">
+                          <div className={`font-semibold ${bal >= 0 ? 'text-orange-600' : 'text-green-600'}`}>{bal.toFixed(2)} DZD</div>
+                          {c.phone && <div className="text-muted-foreground">📞 {c.phone}</div>}
+                          {c.address && <div className="text-muted-foreground truncate" title={c.address}>📍 {c.address}</div>}
+                          {c.note && <div className="text-muted-foreground truncate" title={c.note}>📝 {c.note}</div>}
+                          <div className="text-xs text-muted-foreground pt-1">Tap to view history</div>
+                        </CardContent>
+                      </Card>
+                    </button>
                   );
                 })}
               </div>
@@ -253,6 +301,80 @@ export default function CreditsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Client Details + History Dialog */}
+      <Dialog open={!!openClientId} onOpenChange={(o) => !o ? setOpenClientId(null) : null}>
+        <DialogContent className="max-w-2xl">
+          {openClient && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{openClient.name}</DialogTitle>
+                <DialogDescription>
+                  Group: {openClient.group} · Balance: <span className={`font-semibold ${((balances.get(openClient.name) || 0) >= 0) ? 'text-orange-600' : 'text-green-600'}`}>{(balances.get(openClient.name) || 0).toFixed(2)} DZD</span>
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid grid-cols-12 gap-3">
+                <div className="col-span-12 md:col-span-5 space-y-2 border rounded-md p-3">
+                  <div className="font-medium text-sm">Client Info</div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Phone</Label>
+                    <Input value={editDraft.phone || ''} onChange={(e) => setEditDraft(d => ({ ...d, phone: e.target.value }))} placeholder="0555..." />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Address</Label>
+                    <Input value={editDraft.address || ''} onChange={(e) => setEditDraft(d => ({ ...d, address: e.target.value }))} placeholder="City, Street" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Note</Label>
+                    <Input value={editDraft.note || ''} onChange={(e) => setEditDraft(d => ({ ...d, note: e.target.value }))} placeholder="Notes" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Group</Label>
+                    <Select value={editDraft.group || openClient.group} onValueChange={(v) => setEditDraft(d => ({ ...d, group: v as CreditClient['group'] }))}>
+                      <SelectTrigger className="w-full"><SelectValue placeholder="Group" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Companies">Companies</SelectItem>
+                        <SelectItem value="Entrepreneurs">Entrepreneurs</SelectItem>
+                        <SelectItem value="Agricultures">Agricultures</SelectItem>
+                        <SelectItem value="Normal People">Normal People</SelectItem>
+                        <SelectItem value="Other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="pt-2">
+                    <Button
+                      onClick={() => {
+                        if (!openClientId) return;
+                        setClients(prev => prev.map(c => c.id === openClientId ? { ...c, phone: (editDraft.phone || '').trim() || undefined, address: (editDraft.address || '').trim() || undefined, note: (editDraft.note || '').trim() || undefined, group: editDraft.group || c.group } : c));
+                        setOpenClientId(null);
+                      }}
+                    >Save</Button>
+                  </div>
+                </div>
+                <div className="col-span-12 md:col-span-7 space-y-2">
+                  <div className="font-medium text-sm">Full Credit History</div>
+                  <div className="space-y-1 text-sm max-h-72 overflow-auto">
+                    {history.filter(h => h.customer === openClient.name).length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No history for this client.</div>
+                    ) : (
+                      history.filter(h => h.customer === openClient.name).map(tx => (
+                        <div key={tx.id} className="grid grid-cols-12 gap-2 items-center border rounded-md p-2">
+                          <div className="col-span-3 text-xs text-muted-foreground">{tx.date}</div>
+                          <div className="col-span-4">{tx.kind === 'sale' ? (tx.category || 'Sale') : 'Payment'}</div>
+                          <div className={`col-span-5 text-right font-semibold ${tx.kind === 'sale' ? 'text-green-600' : 'text-red-600'}`}>
+                            {tx.kind === 'sale' ? '+ ' : '- '} {tx.amount.toFixed(2)} DZD
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+              <DialogFooter />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

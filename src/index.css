@@ -74,3 +74,10 @@
       @apply bg-background text-foreground;
     }
   }
+
+  /* Mobile: stack 12-column grids for better readability */
+  @media (max-width: 768px) {
+    .grid.grid-cols-12 > * {
+      grid-column: 1 / -1 !important;
+    }
+  }

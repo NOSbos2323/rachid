@@ -29,7 +29,7 @@ type Tank = {
   current: number;
   price: number;
   profitPerL: number;
-  history: { date: string; type: "fill" | "refill" | "deduct"; liters: number; note?: string }[];
+  history: { date: string; type: "fill" | "refill" | "deduct"; liters: number; note?: string; factureNo?: string }[];
 };
 
 type Assignments = Record<string, string | undefined>; // pumpId -> tankId
@@ -110,6 +110,7 @@ export default function TanksPage() {
     const v = prompt("Liters to add", "0");
     if (v == null) return;
     const liters = Math.max(0, parseFloat(v) || 0);
+    const factureNo = prompt("Facture number (optional)") || undefined;
     const note = prompt("Note (optional)") || undefined;
     setTanks((prev) =>
       prev.map((t) => {
@@ -120,7 +121,7 @@ export default function TanksPage() {
           current: next,
           history: [
             ...t.history,
-            { date: todayKey(), type: t.current === 0 ? "fill" : "refill", liters, note },
+            { date: todayKey(), type: t.current === 0 ? "fill" : "refill", liters, note, factureNo },
           ],
         };
       })
@@ -278,10 +279,11 @@ export default function TanksPage() {
             ) : (
               historyRows.map((h, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-center border rounded-md p-2">
-                  <div className="col-span-3 font-medium">{h.tankName}</div>
-                  <div className="col-span-3">{h.date}</div>
-                  <div className="col-span-3 capitalize">{h.type}</div>
-                  <div className="col-span-3 font-semibold">{h.type === "deduct" ? "-" : "+"}{h.liters} L</div>
+                  <div className="col-span-12 sm:col-span-4 md:col-span-3 font-medium">{h.tankName}</div>
+                  <div className="col-span-6 sm:col-span-3 md:col-span-2">{h.date}</div>
+                  <div className="col-span-6 sm:col-span-3 md:col-span-2 capitalize">{h.type}</div>
+                  <div className="col-span-6 sm:col-span-3 md:col-span-3 font-semibold">{h.type === "deduct" ? "-" : "+"}{h.liters} L</div>
+                  <div className="col-span-6 sm:col-span-3 md:col-span-2 text-xs text-muted-foreground">Facture: {h.factureNo || '—'}</div>
                 </div>
               ))
             )}

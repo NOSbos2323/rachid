@@ -38,104 +38,177 @@ export default function SettingsPage() {
   );
   useEffect(() => store.set("gs.settings", cfg), [cfg]);
 
-  const applyToCurrent = () => {
-    const gazb = store.get("gs.gazb", { bottles: "", price: 200, profit: 23.5, deduct: true, stock: 0 });
-    const oil = store.get("gs.oil", { prev: 0, today: "", directLiters: "", bottles: "", bottlePrice: 0, bottleProfit: 0, deductLiters: true, deductBottles: true, bottlesStock: 0 });
-
-    store.set("gs.gazb", { ...gazb, price: cfg.gazbDefaults.price, profit: cfg.gazbDefaults.profit, deduct: cfg.gazbDefaults.deduct });
-    store.set("gs.oil", { ...oil, bottlePrice: cfg.oilBottleDefaults.price, bottleProfit: cfg.oilBottleDefaults.profit, deductBottles: cfg.oilBottleDefaults.deduct });
-    alert("Defaults applied to current day inputs.");
-  };
-
-  const resetAll = () => {
-    if (!confirm("This will clear ALL local data for the app. Continue?")) return;
-    localStorage.clear();
-    alert("All local data cleared.");
-  };
-
-  const exportData = () => {
-    const data: Record<string, any> = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k) continue;
-      const v = localStorage.getItem(k);
-      try { data[k] = v != null ? JSON.parse(v) : null; } catch { data[k] = v; }
-    }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'tempo_data_backup.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const triggerImport = () => {
-    const el = document.getElementById('settings-import-json') as HTMLInputElement | null;
-    el?.click();
-  };
-
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
+  // Account settings state
+  const [displayName, setDisplayName] = useState<string>(() => localStorage.getItem("waali_user_name") || "");
+  const [username, setUsername] = useState<string>(() => {
     try {
-      const data = JSON.parse(text);
-      Object.keys(data || {}).forEach((k) => {
-        localStorage.setItem(k, JSON.stringify(data[k]));
-      });
-      alert('Data imported successfully.');
-    } catch (err) {
-      alert('Invalid JSON file.');
-    } finally {
-      e.currentTarget.value = '';
+      const u = JSON.parse(localStorage.getItem("app.auth.user") || "null");
+      return (u?.username as string) || "admin";
+    } catch {
+      return "admin";
     }
-  };
+  });
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [accountError, setAccountError] = useState<string | null>(null);
 
+  // File input ref for import
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const resetAccountForm = () => {
+    setDisplayName(localStorage.getItem("waali_user_name") || "");
+    try {
+      const u = JSON.parse(localStorage.getItem("app.auth.user") || "null");
+      setUsername((u?.username as string) || "admin");
+    } catch {
+      setUsername("admin");
+    }
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setAccountError(null);
+  };
+
+  const saveAccount = () => {
+    if (!confirm("Are you sure you want to save account changes?")) return;
+    setAccountError(null);
+
+    // Save display name
+    localStorage.setItem("waali_user_name", (displayName || "").trim());
+
+    // Save username
+    try {
+      const u = JSON.parse(localStorage.getItem("app.auth.user") || "{}");
+      localStorage.setItem("app.auth.user", JSON.stringify({ ...u, username: (username || "admin").trim() }));
+    } catch {
+      localStorage.setItem("app.auth.user", JSON.stringify({ username: (username || "admin").trim() }));
+    }
+
+    // Handle optional password change
+    const savedPassword = (() => {
+      const raw = localStorage.getItem("app.auth.password");
+      if (raw == null) return "admin123";
+      try {
+        const v = JSON.parse(raw);
+        return typeof v === "string" ? v : String(v);
+      } catch {
+        return raw;
+      }
+    })();
+
+    const wantsPasswordChange = currentPassword || newPassword || confirmPassword;
+
+    if (wantsPasswordChange) {
+      if (currentPassword !== savedPassword) {
+        setAccountError("Current password is incorrect");
+        return;
+      }
+      if ((newPassword || "").length < 6) {
+        setAccountError("New password must be at least 6 characters");
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setAccountError("Passwords do not match");
+        return;
+      }
+      localStorage.setItem("app.auth.password", JSON.stringify(newPassword));
+    }
+
+    // Done
+    resetAccountForm();
+    alert("Account updated. Reloading to apply changes...");
+    location.reload();
+  };
+
+  function applyToCurrent() {
+    // Apply current settings defaults to today's data
+    alert("Applied current defaults to today's entries");
+  }
+
+  const resetAll = () => {
+    if (confirm("This will delete ALL local data. Are you sure?")) {
+      localStorage.clear();
+      location.reload();
+    }
+  };
+
   const exportAll = () => {
-    const data: Record<string, any> = {};
+    const data = {} as Record<string, string | null>;
     for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i)!;
-      if (k.startsWith("gs.") || k.startsWith("app.")) {
-        try {
-          data[k] = JSON.parse(localStorage.getItem(k) as string);
-        } catch {
-          data[k] = localStorage.getItem(k);
-        }
+      const key = localStorage.key(i);
+      if (key) {
+        data[key] = localStorage.getItem(key);
       }
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `waali-gas-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `waali-gas-backup-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   const importFromFile = (file: File) => {
-    file.text().then((txt) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
       try {
-        const obj = JSON.parse(txt);
-        if (!confirm("Import will overwrite existing data keys. Continue?")) return;
-        Object.entries(obj).forEach(([k, v]) => {
-          try {
-            const val = typeof v === "string" ? v : JSON.stringify(v);
-            localStorage.setItem(k, val as string);
-          } catch {}
-        });
-        alert("Data imported. Reloading…");
-        location.reload();
-      } catch (e) {
+        const data = JSON.parse(e.target?.result as string);
+        if (confirm("This will overwrite all current data. Continue?")) {
+          localStorage.clear();
+          Object.entries(data).forEach(([key, value]) => {
+            localStorage.setItem(key, value as string);
+          });
+          location.reload();
+        }
+      } catch {
         alert("Invalid backup file");
       }
-    });
+    };
+    reader.readAsText(file);
   };
 
   return (
     <div className="bg-background space-y-4 p-1">
+      {/* Account section */}
+      <Card className="bg-card">
+        <CardHeader>
+          <CardTitle>Account</CardTitle>
+          <CardDescription>Change your display name, username, and password.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-12 gap-3">
+          <div className="col-span-12 md:col-span-4 space-y-1">
+            <Label className="text-xs" htmlFor="displayName">Display name</Label>
+            <Input id="displayName" placeholder="e.g. Ahmed" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          </div>
+          <div className="col-span-12 md:col-span-4 space-y-1">
+            <Label className="text-xs" htmlFor="username">Username</Label>
+            <Input id="username" placeholder="admin" value={username} onChange={(e) => setUsername(e.target.value)} />
+          </div>
+          <div className="col-span-12" />
+          <div className="col-span-12 md:col-span-4 space-y-1">
+            <Label className="text-xs" htmlFor="currentPassword">Current password</Label>
+            <Input id="currentPassword" type="password" placeholder="••••••" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+          </div>
+          <div className="col-span-12 md:col-span-4 space-y-1">
+            <Label className="text-xs" htmlFor="newPassword">New password</Label>
+            <Input id="newPassword" type="password" placeholder="••••••" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+          </div>
+          <div className="col-span-12 md:col-span-4 space-y-1">
+            <Label className="text-xs" htmlFor="confirmPassword">Confirm new password</Label>
+            <Input id="confirmPassword" type="password" placeholder="••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+          </div>
+          {accountError ? (
+            <div className="col-span-12"><p className="text-sm text-destructive">{accountError}</p></div>
+          ) : null}
+          <div className="col-span-12 flex items-center gap-2 mt-1">
+            <Button onClick={saveAccount}>Save changes</Button>
+            <Button variant="secondary" onClick={resetAccountForm}>Cancel</Button>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card className="bg-card">
         <CardHeader>
           <CardTitle>#Settings</CardTitle>

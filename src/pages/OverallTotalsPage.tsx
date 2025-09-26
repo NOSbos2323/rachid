@@ -67,6 +67,8 @@ export default function OverallTotalsPage() {
     return { list: combined, sums };
   }, [daily, storeHist, from, to]);
 
+  const fmtDZD = (n: number) => `${n.toFixed(2)} DZD`;
+
   return (
     <div className="bg-background space-y-4">
       <Card className="bg-card">
@@ -86,11 +88,11 @@ export default function OverallTotalsPage() {
           <div className="col-span-6 text-sm">
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">Total Profite (TP):</span>
-              <span className="font-semibold">{sums.tProf.toFixed(2)} DZD</span>
+              <span className="font-semibold">{fmtDZD(sums.tProf)}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">Net Profite (NP):</span>
-              <span className="font-semibold">{sums.nProf.toFixed(2)} DZD</span>
+              <span className="font-semibold">{fmtDZD(sums.nProf)}</span>
             </div>
           </div>
         </CardContent>
@@ -110,7 +112,7 @@ export default function OverallTotalsPage() {
                 <div key={i} className="grid grid-cols-12 gap-2 items-center border rounded-md p-2">
                   <div className="col-span-3 font-medium">{r.date}</div>
                   <div className="col-span-6">{r.source}</div>
-                  <div className="col-span-3 text-right font-semibold">TP {r.tProf.toFixed(2)} · NP {r.nProf.toFixed(2)}</div>
+                  <div className="col-span-3 text-right font-semibold">TP {fmtDZD(r.tProf)} · NP {fmtDZD(r.nProf)}</div>
                 </div>
               ))
             )}

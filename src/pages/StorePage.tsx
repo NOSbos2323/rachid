@@ -132,6 +132,7 @@ export default function StorePage() {
   const removeItem = (id: string) => setItems((s) => s.filter(i => i.id !== id));
 
   const saveDay = () => {
+    if (!confirm("Are you sure you want to save store sales for today?")) return;
     const entry: StoreHistoryItem = { date: todayKey(), totals: { tProf: Number(totals.tProf.toFixed(2)), nProf: Number(totals.nProf.toFixed(2)) } };
     const hist = store.get<StoreHistoryItem[]>("gs.history.store", []);
     store.set("gs.history.store", [...hist, entry]);

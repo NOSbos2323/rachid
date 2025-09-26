@@ -5,6 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Sun, Moon } from "lucide-react";
+import { Menu } from "lucide-react";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import MainPage from "./MainPage";
 import TanksPage from "./TanksPage";
 import StorePage from "./StorePage";
@@ -55,6 +59,14 @@ export default function ActivationGate() {
   const [user, setUser] = useState<User>(() => storage.get<User>(AUTH_KEY, null));
   const [theme, setTheme] = useState<string>(() => storage.get<string>(THEME_KEY, "light"));
   const [lang, setLang] = useState<string>(() => storage.get<string>(LANG_KEY, "fr"));
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [displayName, setDisplayName] = useState<string>(() =>
+    localStorage.getItem("waali_user_name") || ""
+  );
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [accountError, setAccountError] = useState<string | null>(null);
 
   useEffect(() => {
     storage.set(THEME_KEY, theme);
@@ -134,12 +146,34 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: (u: User) => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
-  const defaultUser = useMemo(() => ({ username: "admin", password: "admin123" }), []);
+  // Read persisted credentials (password persists across sessions)
+  const savedPassword = useMemo(() => {
+    const raw = localStorage.getItem("app.auth.password");
+    if (raw == null) return "admin123";
+    try {
+      const v = JSON.parse(raw);
+      return typeof v === "string" ? v : String(v);
+    } catch {
+      // If it wasn't JSON-encoded, use the raw value
+      return raw;
+    }
+  }, []);
+  const savedUsername = useMemo(() => {
+    try {
+      const u = storage.get<User>("app.auth.user", null);
+      return (u as any)?.username || "admin";
+    } catch {
+      return "admin";
+    }
+  }, []);
 
   const handleLogin = () => {
-    const ok = (username || "").trim() === defaultUser.username && password === defaultUser.password;
+    const expectedUser = (savedUsername || "admin").trim();
+    const expectedPass = savedPassword;
+    const inputUser = (username || savedUsername || "admin").trim();
+    const ok = inputUser === expectedUser && password === expectedPass;
     if (ok) {
-      const u = { username };
+      const u = { username: expectedUser };
       storage.set(AUTH_KEY, u);
       setError("");
       onLoggedIn(u);
@@ -150,12 +184,12 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: (u: User) => void }) {
     <Card className="w-full max-w-md bg-card">
       <CardHeader>
         <CardTitle>Login</CardTitle>
-        <CardDescription>Local only. Default admin/admin123</CardDescription>
+        <CardDescription>Use your credentials. Default is admin/admin123</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="username">Username</Label>
-          <Input id="username" placeholder="admin" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <Input id="username" placeholder={savedUsername} value={username} onChange={(e) => setUsername(e.target.value)} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="password">Password</Label>
@@ -184,6 +218,51 @@ function MainShell({
   onLogout: () => void;
 }) {
   const [active, setActive] = useState<string>("main");
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Add missing profile/account state inside MainShell
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [displayName, setDisplayName] = useState<string>(() =>
+    localStorage.getItem("waali_user_name") || ""
+  );
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [accountError, setAccountError] = useState<string | null>(null);
+
+  const handleSaveAccount = () => {
+    setAccountError(null);
+
+    // Always save display name
+    localStorage.setItem("waali_user_name", (displayName || "").trim());
+
+    // Optional password update
+    const savedPassword = storage.get<string>("app.auth.password", "admin123");
+    const wantsPasswordChange =
+      currentPassword.length > 0 || newPassword.length > 0 || confirmPassword.length > 0;
+
+    if (wantsPasswordChange) {
+      if (currentPassword !== savedPassword) {
+        setAccountError("Current password is incorrect");
+        return;
+      }
+      if (newPassword.length < 6) {
+        setAccountError("New password must be at least 6 characters");
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setAccountError("Passwords do not match");
+        return;
+      }
+      storage.set("app.auth.password", newPassword);
+    }
+
+    // Reset form and close
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setAccountOpen(false);
+  };
 
   const items = [
     { key: "main", label: "Main" },
@@ -199,8 +278,8 @@ function MainShell({
   ];
 
   return (
-    <div className="min-h-screen bg-background text-foreground grid grid-cols-[240px_1fr]">
-      <aside className="h-screen sticky top-0 border-r bg-card">
+    <div className="min-h-screen bg-background text-foreground grid grid-cols-1 md:grid-cols-[240px_1fr]">
+      <aside className="h-screen sticky top-0 border-r bg-card hidden md:block">
         <div className="p-4 border-b flex items-center gap-2">
           <img src="/waali-gas-logo.svg" alt="Waali Gas Station" className="h-6 w-6" />
           <div>
@@ -221,8 +300,38 @@ function MainShell({
         </nav>
       </aside>
       <div className="min-h-screen flex flex-col">
-        <header className="h-14 border-b bg-card flex items-center justify-between px-4 gap-4">
+        <header className="h-14 border-b bg-card flex items-center justify-between px-2 md:px-4 gap-2 md:gap-4">
           <div className="flex items-center gap-2">
+            {/* Mobile hamburger menu */}
+            <div className="md:hidden">
+              <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+                <SheetTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="Open menu">
+                    <Menu className="h-5 w-5" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" className="p-0">
+                  <div className="p-4 border-b flex items-center gap-2">
+                    <img src="/waali-gas-logo.svg" alt="Waali Gas Station" className="h-6 w-6" />
+                    <div>
+                      <p className="font-semibold">Waali Gas Station</p>
+                      <p className="text-xs text-muted-foreground">Dashboard</p>
+                    </div>
+                  </div>
+                  <nav className="p-2 space-y-1">
+                    {items.map((it) => (
+                      <button
+                        key={it.key}
+                        onClick={() => { setActive(it.key); setMenuOpen(false); }}
+                        className={`w-full text-left rounded-md px-3 py-2 text-sm hover:bg-accent ${active === it.key ? "bg-accent" : ""}`}
+                      >
+                        {it.label}
+                      </button>
+                    ))}
+                  </nav>
+                </SheetContent>
+              </Sheet>
+            </div>
             <span className="text-sm text-muted-foreground">{formatToday()}</span>
           </div>
           <div className="flex items-center gap-4">
@@ -232,14 +341,57 @@ function MainShell({
               <Moon className="h-4 w-4" />
             </div>
             <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1">
-                <Button variant={lang === "ar" ? "default" : "secondary"} size="sm" onClick={() => setLang("ar")}>AR</Button>
-                <Button variant={lang === "fr" ? "default" : "secondary"} size="sm" onClick={() => setLang("fr")}>FR</Button>
-                <Button variant={lang === "en" ? "default" : "secondary"} size="sm" onClick={() => setLang("en")}>EN</Button>
-              </div>
+              {/* Single language toggle button */}
+              <Button
+                variant="secondary"
+                size="sm"
+                aria-label="Toggle language"
+                onClick={() => setLang(lang === "fr" ? "en" : "fr")}
+              >
+                {(lang || "en").toUpperCase()}
+              </Button>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm">{user?.username || "user"}</span>
+              <span className="text-sm">{displayName || user?.username || "user"}</span>
+              <Dialog open={accountOpen} onOpenChange={setAccountOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">Edit Profile</Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Account settings</DialogTitle>
+                    <DialogDescription>Update your display name and password.</DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="displayName">Display name</Label>
+                      <Input id="displayName" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="e.g. Ahmed" />
+                    </div>
+                    <Separator />
+                    <div className="grid gap-2">
+                      <Label htmlFor="currentPassword">Current password</Label>
+                      <Input id="currentPassword" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="••••••" />
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2 md:gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="newPassword">New password</Label>
+                        <Input id="newPassword" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="••••••" />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="confirmPassword">Confirm new password</Label>
+                        <Input id="confirmPassword" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••" />
+                      </div>
+                    </div>
+                    {accountError ? (
+                      <p className="text-sm text-destructive">{accountError}</p>
+                    ) : null}
+                  </div>
+                  <DialogFooter>
+                    <Button variant="secondary" onClick={() => setAccountOpen(false)}>Cancel</Button>
+                    <Button onClick={handleSaveAccount}>Save changes</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
               <Button variant="secondary" size="sm" onClick={onLogout}>Logout</Button>
             </div>
           </div>
