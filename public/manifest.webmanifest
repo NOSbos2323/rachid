@@ -1,13 +1,92 @@
 {
   "name": "Waali Gas Station",
   "short_name": "WaaliGas",
+  "description": "نظام إدارة محطة وقود وعلي - تطبيق شامل لإدارة المبيعات والمخزون والموظفين",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "start_url": "/",
   "scope": "/",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["business", "productivity", "utilities"],
+  "screenshots": [
+    {
+      "src": "/screens/Screenshot-1256.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "الشاشة الرئيسية"
+    },
+    {
+      "src": "/screens/Screenshot-1257.png", 
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "إدارة الخزانات"
+    }
+  ],
   "icons": [
-    { "src": "/waali-gas-logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/waali-gas-logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
-  ]
+    { 
+      "src": "/waali-gas-logo.svg", 
+      "sizes": "any", 
+      "type": "image/svg+xml", 
+      "purpose": "any" 
+    },
+    { 
+      "src": "/waali-gas-logo.svg", 
+      "sizes": "any", 
+      "type": "image/svg+xml", 
+      "purpose": "maskable" 
+    },
+    {
+      "src": "/waali-gas-logo.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/waali-gas-logo.svg",
+      "sizes": "512x512", 
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "المبيعات",
+      "short_name": "مبيعات",
+      "description": "عرض وإدارة المبيعات",
+      "url": "/sales",
+      "icons": [{ "src": "/waali-gas-logo.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "الخزانات",
+      "short_name": "خزانات", 
+      "description": "مراقبة مستويات الوقود",
+      "url": "/tanks",
+      "icons": [{ "src": "/waali-gas-logo.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "التقارير",
+      "short_name": "تقارير",
+      "description": "عرض التقارير والإحصائيات",
+      "url": "/reports", 
+      "icons": [{ "src": "/waali-gas-logo.svg", "sizes": "96x96" }]
+    }
+  ],
+  "related_applications": [
+    {
+      "platform": "windows",
+      "url": "https://waali-gas.com/download/windows"
+    }
+  ],
+  "prefer_related_applications": false,
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  }
 }

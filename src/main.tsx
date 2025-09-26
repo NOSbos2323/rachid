@@ -23,11 +23,13 @@ if ("serviceWorker" in navigator) {
     // In dev (including Tempo), ensure no stale SW caches block updates
     navigator.serviceWorker.getRegistrations().then((regs) => {
       for (const r of regs) r.unregister();
+    }).catch((error) => {
+      console.warn("Failed to unregister service workers:", error);
     });
   } else {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/sw.js").catch((err) => {
-        console.warn("SW registration failed", err);
+      navigator.serviceWorker.register("/sw.js").catch((error) => {
+        console.warn("SW registration failed:", error);
       });
     });
   }
